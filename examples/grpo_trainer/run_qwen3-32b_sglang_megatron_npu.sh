@@ -1,8 +1,8 @@
 #!/bin/bash
 set -xeuo pipefail
 # Project Configuration
-project_name='DAPO-Qwen3-30b-A3B-BASE-MATH'
-exp_name='DAPO-Qwen3-30B-A3B-BASE-Megatron-SGLang'
+project_name='GRPO-Qwen3-32B-BASE-MATH'
+exp_name='GRPO-Qwen3-32B-BASE-MindSpeedLLM-SGLang'
 
 # Necessary env
 export HCCL_CONNECT_TIMEOUT=1500
@@ -20,14 +20,13 @@ NNODES=${NNODES:-1}
 NPUS_PER_NODE=${NPUS_PER_NODE:-16}
 
 # Model Weights Paths
-MODEL_PATH=Qwen/Qwen3-30B-A3B
-MCORE_MODEL_PATH=Qwen/Qwen3-30B-A3B-mcore
+MODEL_PATH=Qwen/Qwen3-32B
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
 
 # File System Paths
 TRAIN_FILE=$RAY_DATA_HOME/gsm8k/train.parquet
-TEST_FILE=$RAY_DATA_HOME/gsm8k/test.parquett
+TEST_FILE=$RAY_DATA_HOME/gsm8k/test.parquet
 # Data Length Configuration
 max_prompt_length=$((1024 * 2))
 max_response_length=$((1024 * 2))
@@ -52,15 +51,12 @@ infer_ppo_max_token_len=$(((max_prompt_length + max_response_length)))
 
 # Megatron Parallelism Configuration
 train_tp=4
-train_ep=4
-train_etp=1
-train_pp=2
+train_pp=4
 train_cp=1
 
 # SGLang Generation Configuration
 gen_tp=4
 gen_dp=1
-gen_ep=1
 gpu_memory_utilization=0.5
 max_model_len=$((max_prompt_length + max_response_length))
 max_num_batched_tokens=$(((max_prompt_length + max_response_length) * 1))
@@ -114,24 +110,24 @@ ACTOR_CONFIG=(
     # Optimizer Settings
     actor_rollout_ref.actor.optim.lr=1e-6
     # Megatron Parallelism Strategy
-    actor_rollout_ref.actor.megatron.tensor_model_parallel_size=${train_tp}
-    actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=${train_pp}
-    actor_rollout_ref.actor.megatron.context_parallel_size=${train_cp}
-    actor_rollout_ref.actor.megatron.expert_model_parallel_size=${train_ep}
-    actor_rollout_ref.actor.megatron.expert_tensor_parallel_size=${train_etp}
+    actor_rollout_ref.actor.mindspeedllm.tensor_model_parallel_size=${train_tp}
+    actor_rollout_ref.actor.mindspeedllm.pipeline_model_parallel_size=${train_pp}
+    actor_rollout_ref.actor.mindspeedllm.context_parallel_size=${train_cp}
     # Memory Optimization
-    actor_rollout_ref.actor.megatron.param_offload=${all_offload}
-    actor_rollout_ref.actor.megatron.optimizer_offload=${all_offload}
-    actor_rollout_ref.actor.megatron.grad_offload=${all_offload}
+    actor_rollout_ref.actor.mindspeedllm.param_offload=${all_offload}
+    actor_rollout_ref.actor.mindspeedllm.optimizer_offload=${all_offload}
+    actor_rollout_ref.actor.mindspeedllm.grad_offload=${all_offload}
     # Model Weights Management
-    actor_rollout_ref.actor.megatron.dist_checkpointing_path=${MCORE_MODEL_PATH}
-    actor_rollout_ref.actor.megatron.use_dist_checkpointing=True
-    actor_rollout_ref.actor.megatron.use_mbridge=False
+    actor_rollout_ref.actor.mindspeedllm.use_mbridge=True
+    actor_rollout_ref.actor.mindspeedllm.vanilla_mbridge=True
     # Transformer Architecture Optimizations
-    +actor_rollout_ref.actor.megatron.override_transformer_config.use_flash_attn=True
-    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=uniform
-    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=full
-    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=1
+    actor_rollout_ref.actor.mindspeedllm.engine_kwargs.seq_length=${max_model_len}
+    actor_rollout_ref.actor.mindspeedllm.engine_kwargs.num_query_groups=8
+    +actor_rollout_ref.actor.mindspeedllm.engine_kwargs.recompute_method=uniform
+    +actor_rollout_ref.actor.mindspeedllm.engine_kwargs.recompute_granularity=full
+    +actor_rollout_ref.actor.mindspeedllm.engine_kwargs.recompute_num_layers=1
+    +actor_rollout_ref.actor.mindspeedllm.engine_kwargs.overlap_grad_reduce=full
+    +actor_rollout_ref.actor.mindspeedllm.engine_kwargs.overlap_param_gather=1
 )
 
 REF_CONFIG=(
@@ -142,17 +138,14 @@ REF_CONFIG=(
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=${use_dynamic_bsz}
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=${infer_ppo_max_token_len}
     # Megatron Parallelism Strategy
-    actor_rollout_ref.ref.megatron.tensor_model_parallel_size=${train_tp}
-    actor_rollout_ref.ref.megatron.pipeline_model_parallel_size=${train_pp}
-    actor_rollout_ref.ref.megatron.context_parallel_size=${train_cp}
-    actor_rollout_ref.ref.megatron.expert_model_parallel_size=${train_ep}
-    actor_rollout_ref.ref.megatron.expert_tensor_parallel_size=${train_etp}
+    actor_rollout_ref.ref.mindspeedllm.tensor_model_parallel_size=${train_tp}
+    actor_rollout_ref.ref.mindspeedllm.pipeline_model_parallel_size=${train_pp}
+    actor_rollout_ref.ref.mindspeedllm.context_parallel_size=${train_cp}
     # Memory Optimization
-    actor_rollout_ref.ref.megatron.param_offload=${all_offload}
+    actor_rollout_ref.ref.mindspeedllm.param_offload=${all_offload}
     # Model Weights Management
-    actor_rollout_ref.ref.megatron.dist_checkpointing_path=${MCORE_MODEL_PATH}
-    actor_rollout_ref.ref.megatron.use_dist_checkpointing=True
-    actor_rollout_ref.ref.megatron.use_mbridge=False
+    actor_rollout_ref.ref.mindspeedllm.use_mbridge=True
+    actor_rollout_ref.ref.mindspeedllm.vanilla_mbridge=True
 )
 
 ROLLOUT_CONFIG=(
@@ -173,7 +166,6 @@ ROLLOUT_CONFIG=(
     # Parallelism Strategy
     actor_rollout_ref.rollout.tensor_model_parallel_size=${gen_tp}
     actor_rollout_ref.rollout.data_parallel_size=${gen_dp}
-    actor_rollout_ref.rollout.expert_parallel_size=${gen_ep}
     +actor_rollout_ref.rollout.engine_kwargs.sglang.enable_dp_attention=False
     # Performance Optimization
     +actor_rollout_ref.rollout.engine_kwargs.sglang.chunked_prefill_size=-1
