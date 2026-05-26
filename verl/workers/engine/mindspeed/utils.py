@@ -221,3 +221,14 @@ def gpt_model_provider(pre_process=True, post_process=True):
     )
 
     return model
+
+
+def fsdp_turbo_module(fsdp_config, module):
+    from dacite import from_dict
+    from fsdp_turbo.fsdp_turbo import FSDPTurbo
+    from fsdp_turbo.fsdp_turbo_config import FSDPTurboConfig
+
+    fsdp_turbo_config = from_dict(FSDPTurboConfig, fsdp_config)
+    module = FSDPTurbo(fsdp_turbo_config, module)
+
+    return module.model
