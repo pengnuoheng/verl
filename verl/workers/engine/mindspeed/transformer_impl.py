@@ -21,21 +21,33 @@ except ImportError:
     repatch = None
 
 from verl.trainer.config import CheckpointConfig
-from verl.utils.megatron.router_replay_patch import RouterReplay
 from verl.utils.model import print_model_size
 from verl.workers.config import (
     HFModelConfig,
     McoreEngineConfig,
     McoreOptimizerConfig,
+    MindSpeedOptimizerConfig,
     MindSpeedEngineConfig,
 )
 
-from ..base import EngineRegistry
-from ..megatron import MegatronEngineWithLMHead, MegatronEngineWithValueHead
+from ..base import EngineRegistry, BaseEngine
+
+try:
+    from ..megatron import MegatronEngineWithLMHead, MegatronEngineWithValueHead
+except ImportError:
+    MegatronEngineWithLMHead = BaseEngine
+    MegatronEngineWithValueHead = BaseEngine
+
+try:
+    from ..fsdp import FSDPEngineWithLMHead
+except ImportError:
+    FSDPEngineWithLMHead = BaseEngine
+
 from .utils import (
     apply_patch,
     gpt_model_provider,
     reset_fp8_reuse_quantized_weight,
+    apply_clip_grad_norm_patch,
 )
 
 logger = logging.getLogger(__file__)
@@ -119,7 +131,7 @@ class MindSpeedMegatronEngineWithLMHead(MegatronEngineWithLMHead):
         self,
         model_config: HFModelConfig,
         engine_config: MindSpeedEngineConfig,
-        optimizer_config: McoreOptimizerConfig,
+        optimizer_config: MindSpeedOptimizerConfig,
         checkpoint_config: CheckpointConfig,
     ):
         super().__init__(model_config, engine_config, optimizer_config, checkpoint_config)
@@ -155,6 +167,7 @@ class MindSpeedMegatronEngineWithLMHead(MegatronEngineWithLMHead):
             print_model_size(module[0])
 
         if self.enable_routing_replay:
+            from verl.utils.megatron.router_replay_patch import RouterReplay
             print(f"routing replay layers: {len(RouterReplay.router_instances)}")
 
         return module
@@ -171,3 +184,89 @@ class MindSpeedMegatronEngineWithLMHead(MegatronEngineWithLMHead):
         """
         reset_fp8_reuse_quantized_weight(self, device, model, optimizer, grad)
         super().to(device=device, model=model, optimizer=optimizer, grad=grad)
+
+
+@EngineRegistry.register(model_type="language_model", backend="mindspeed_fsdp", device="npu")
+class MindSpeedFSDPEngineWithLMHead(FSDPEngineWithLMHead):
+    def __init__(
+            self,
+            model_config: HFModelConfig,
+            engine_config: MindSpeedEngineConfig,
+            optimizer_config: MindSpeedOptimizerConfig,
+            checkpoint_config: CheckpointConfig,
+    ):
+        super().__init__(model_config, engine_config, optimizer_config, checkpoint_config)
+
+    def _init_device_mesh(self):
+        self._init_parallel_state()
+        super()._init_device_mesh()
+        if self._is_ep_enabled():
+            apply_clip_grad_norm_patch()
+        if self._is_ulysses_enabled():
+            self._validate_ulysses_config()
+
+    def _init_parallel_state(self):
+        from fsdp_turbo.fsdp_turbo_config import FSDPTurboConfig, _dict_to_dataclass
+        from fsdp_turbo.distributed.parallel_state import init_parallel_state, get_parallel_state
+
+        self.fsdp_turbo_config = _dict_to_dataclass(FSDPTurboConfig, self.engine_config.fsdp_kwargs)
+        self.fsdp_turbo_config.distributed.fsdp_plan.cpu_offload = self.engine_config.offload_policy
+        init_parallel_state(self.fsdp_turbo_config)
+        self._parallel_state = get_parallel_state()
+
+    def _build_fsdp_module(self, module):
+        from fsdp_turbo.fsdp_turbo import FSDPTurbo
+        from verl.utils.fsdp_utils import fsdp2_load_full_state_dict
+
+        full_state = module.state_dict()
+        module = FSDPTurbo(self.fsdp_turbo_config, module).model
+        offload_policy = None
+        if self.engine_config.offload_policy or self.engine_config.forward_only:
+            self._is_offload_param = False
+            self._is_offload_optimizer = False
+            offload_policy = True
+            self._uses_fsdp2_cpu_offload_policy = True
+        fsdp2_load_full_state_dict(module, full_state, None, offload_policy)
+
+        return module
+
+    def _is_ep_enabled(self):
+        return self._parallel_state.is_group_enable("ep")
+
+    def _is_ulysses_enabled(self):
+        return self._parallel_state.is_group_enable("ulysses")
+
+    def _validate_ulysses_config(self):
+        if not self.use_remove_padding:
+            raise ValueError(
+                "FSDP-Turbo CP currently requires "
+                "actor_rollout_ref.model.use_remove_padding=True so that verl's "
+                "existing CP output path can gather local log-probs."
+            )
+        if self.ulysses_sequence_parallel_size > 1:
+            raise ValueError(
+                "Do not enable both FSDP-Turbo CP and verl Ulysses SP. "
+                "Use fsdp_kwargs.distributed.ulysses_parallel_size for Turbo CP "
+                "and set ulysses_sequence_parallel_size=1."
+            )
+
+        self.model_config.hf_config._attn_implementation = "eager"
+        self.ulysses_sequence_parallel_size = self._parallel_state.get_ulysses_group_size()
+        self.ulysses_parallel_group = self._parallel_state.get_ulysses_group()
+        self.use_ulysses_sp = True
+
+    def get_data_parallel_rank(self):
+        return self._parallel_state.get_data_parallel_rank()
+
+    def get_data_parallel_size(self):
+        return self._parallel_state.get_data_parallel_size()
+
+    def get_data_parallel_group(self):
+        return self._parallel_state.get_data_parallel_group()
+
+    def is_mp_src_rank_with_outputs(self):
+        if self._is_ulysses_enabled():
+            is_collect = self._parallel_state.get_ulysses_rank() == 0
+        else:
+            is_collect = True
+        return is_collect
