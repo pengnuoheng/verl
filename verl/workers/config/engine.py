@@ -271,10 +271,11 @@ class FSDPEngineConfig(EngineConfig):
     entropy_checkpointing: bool = False
     strategy: str = "fsdp"
     qat: QATEngineConfig = field(default_factory=QATEngineConfig)
+    turbo_config: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         super().__post_init__()
-        assert self.strategy in ["fsdp", "fsdp2"], f"strategy {self.strategy} not supported"
+        assert self.strategy in ["fsdp", "fsdp2", "fsdp_turbo"], f"strategy {self.strategy} not supported"
 
 
 @dataclass
