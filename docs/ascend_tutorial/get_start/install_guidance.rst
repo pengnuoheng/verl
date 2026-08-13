@@ -20,11 +20,9 @@ Last updated: 2026/08/03.
 
 ..
 
-.. note::
-
-   自动识别 NPU 设备类型的前提，是运行程序所在环境包含 ``torch_npu`` 软件包。如环境中不包含 ``torch_npu``，仍需显式指定 ``trainer.device=npu``。
-
-   A3 每卡含 2 die，A2 每卡 1 die，如果在 A3 机器上跑示例，需要将 ``n_gpus_per_node`` 设置成 16。
+   [说明] 自动识别 NPU 设备类型的前提，是运行程序所在环境包含
+   ``torch_npu`` 软件包。如环境中不包含 ``torch_npu``\ ，仍需显式指定
+   ``trainer.device=npu``\ 。
 
 目录
 --------
@@ -143,6 +141,14 @@ CANN是NPU上的异构计算架构，以下为arm平台A3安装指令，请参�
    bash verl/scripts/install_vllm_mcore_npu.sh
    # 如果您仅需要使用FSDP后端
    # USE_MEGATRON=0 bash verl/scripts/install_vllm_mcore_npu.sh
+
+日志过滤
+^^^^^^^^^^^^^^^^^^^^^^^^
+transformers版本升级后，可能出现大量别名废弃告警，可添加环境变量过滤冗余日志
+
+.. code:: bash
+
+   export TRANSFORMERS_VERBOSITY=error
 
 3. 自定义安装-SGLang + FSDP/Megatron
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
