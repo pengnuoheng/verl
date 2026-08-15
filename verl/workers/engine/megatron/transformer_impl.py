@@ -53,6 +53,7 @@ from verl.utils.megatron.router_replay_utils import (
     merge_router_topk_indices,
     pp_gather,
     reorder_and_merge_vpp_layers,
+    set_model_router_replay_action,
     set_router_replay_data,
 )
 from verl.utils.megatron.tensor_parallel import (
@@ -113,6 +114,8 @@ def _check_dcp_unsupported_features(engine_config, model_config, tf_config=None,
         return
     if not engine_config.use_remove_padding:
         raise ValueError("dynamic_context_parallel requires use_remove_padding=True")
+    if engine_config.pad_to_length:
+        raise NotImplementedError("dynamic_context_parallel does not support pad_to_length")
     if model_config.model_type == "value_model":
         raise NotImplementedError("Dynamic CP currently supports language models only")
     if hasattr(model_config.hf_config, "vision_config"):
@@ -380,10 +383,21 @@ class MegatronEngine(BaseEngine):
 
                 provider.transformer_layer_spec = modelopt_transformer_layer_spec
 
-            provider.apply_overrides_and_finalize(
-                dtype=self.param_dtype,
-                overrides=provider_overrides,
-            )
+            # Megatron-Bridge >= v0.5.0 provides apply_overrides_and_finalize.
+            # Megatron-Bridge <  v0.5.0 does not, so we fall back to manual setattr + finalize.
+            if hasattr(provider, "apply_overrides_and_finalize"):
+                provider.apply_overrides_and_finalize(
+                    dtype=self.param_dtype,
+                    overrides=provider_overrides,
+                )
+            else:
+                provider.params_dtype = self.param_dtype
+                provider.fp16 = self.param_dtype == torch.float16
+                provider.bf16 = self.param_dtype == torch.bfloat16
+                for name, value in provider_overrides.items():
+                    setattr(provider, name, value)
+                if hasattr(provider, "finalize"):
+                    provider.finalize()
             self.provider = provider
             tf_config = None  # Will be set after model creation
         self.bridge = bridge
@@ -965,7 +979,7 @@ class MegatronEngine(BaseEngine):
                 topk_idx_td = merge_nested_router_maps(self.mini_layer_topk_idx_list)
             self.mini_layer_topk_idx_list = []
 
-            layers_topk_idx = pp_gather(topk_idx_td.to(torch.uint8), self.tf_config)
+            layers_topk_idx = pp_gather(topk_idx_td, self.tf_config)
             use_dynamic_bsz = tu.get_non_tensor_data(data=data, key="use_dynamic_bsz", default=True)
             if use_dynamic_bsz and indices is not None:
                 layers_topk_idx = restore_dynamic_batch(layers_topk_idx, indices)
@@ -1226,6 +1240,16 @@ class MegatronEngineWithLMHead(MegatronEngine):
         calculate_sum_pi_squared = tu.get_non_tensor_data(batch, key="calculate_sum_pi_squared", default=False)
         distillation_use_topk = tu.get_non_tensor_data(batch, key="distillation_use_topk", default=False)
         distillation_only = tu.get_non_tensor_data(batch, key="distillation_only", default=False)
+        pad_to_length_bucket = (
+            self.engine_config.pad_to_length_bucket
+            if self.engine_config.pad_to_length and self.engine_config.use_remove_padding
+            else None
+        )
+
+        if pad_to_length_bucket is not None and distillation_use_topk:
+            raise RuntimeError("pad_to_length is not supported with top-K distillation")
+        if pad_to_length_bucket is not None and self.enable_routing_replay:
+            raise RuntimeError("pad_to_length is not supported with router replay")
 
         if calculate_sum_pi_squared and use_fused_kernels:
             raise NotImplementedError(
@@ -1260,6 +1284,7 @@ class MegatronEngineWithLMHead(MegatronEngine):
             router_instance_list = RouterReplayHelper.get_micro_batch_router_list(self.tf_config, vp_rank)
             for router in router_instance_list:
                 router.set_router_replay_action(RouterReplayAction.REPLAY_FORWARD)
+            set_model_router_replay_action(unwrapped_model, RouterReplayAction.REPLAY_FORWARD)
 
         if RouterReplayHelper.is_replay_forward_action(self.tf_config, vp_rank):
             layers_topk_idx = model_inputs["routed_experts"]
@@ -1274,6 +1299,7 @@ class MegatronEngineWithLMHead(MegatronEngine):
                 vp_rank,
                 replay_mask=replay_mask,
                 local_cp_size=local_cp_size,
+                model=unwrapped_model,
             )
 
         if pad_mode == DatasetPadMode.NO_PADDING:
@@ -1299,6 +1325,7 @@ class MegatronEngineWithLMHead(MegatronEngine):
                 cp_layout=cp_layout,
                 local_cp_size=local_cp_size,
                 router_padding_mask=router_padding_mask,
+                pad_to_length_bucket=pad_to_length_bucket,
             )
         else:
             if not isinstance(temperature, torch.Tensor):
@@ -1358,6 +1385,7 @@ class MegatronEngineWithLMHead(MegatronEngine):
                 router_padding_mask=router_padding_mask,
                 mtp_loss_normalization_factor=mtp_loss_normalization_factor,
                 forced_max_seqlen=tu.get_non_tensor_data(data=batch, key="forced_max_seqlen", default=None),
+                pad_to_length_bucket=pad_to_length_bucket,
                 cp_layout=cp_layout,
             )
 
@@ -1372,6 +1400,7 @@ class MegatronEngineWithLMHead(MegatronEngine):
             router_instance_list = RouterReplayHelper.get_micro_batch_router_list(self.tf_config, vp_rank)
             for router in router_instance_list:
                 router.set_router_replay_action(RouterReplayAction.REPLAY_BACKWARD)
+            set_model_router_replay_action(unwrapped_model, RouterReplayAction.REPLAY_BACKWARD)
 
         return output, partial(postprocess_micro_batch_func, data=batch, local_cp_size=local_cp_size)
 
@@ -1479,6 +1508,11 @@ class MegatronEngineWithValueHead(MegatronEngineWithLMHead):
             pad_token_id=self.model_config.tokenizer.pad_token_id,
             data_format="thd" if self.engine_config.use_remove_padding else "bshd",
             forced_max_seqlen=tu.get_non_tensor_data(data=batch, key="forced_max_seqlen", default=None),
+            pad_to_length_bucket=(
+                self.engine_config.pad_to_length_bucket
+                if self.engine_config.pad_to_length and self.engine_config.use_remove_padding
+                else None
+            ),
             cp_layout=cp_layout,
         )
 

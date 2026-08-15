@@ -192,7 +192,6 @@ model_type             backend                 device                 Engine cla
 ``language_model``     ``fsdp`` / ``fsdp2``    ``cuda`` / ``npu``     ``verl.workers.engine.fsdp.FSDPEngineWithLMHead``
 ``language_model``     ``megatron``            ``cuda``               ``verl.workers.engine.megatron.MegatronEngineWithLMHead``
 ``language_model``     ``megatron``            ``npu``                ``verl.workers.engine.mindspeed.MindspeedEngineWithLMHead``
-``language_model``     ``mindspeed_megatron``  ``npu``                ``verl.workers.engine.mindspeed.MindSpeedMegatronEngineWithLMHead``
 ``language_model``     ``automodel``           ``cuda``               ``verl.workers.engine.automodel.AutomodelEngineWithLMHead``
 ``language_model``     ``veomni``              ``cuda`` / ``npu``     ``verl.workers.engine.veomni.VeOmniEngineWithLMHead``
 ``language_model``     ``torchtitan``          ``cuda`` / ``npu``     ``verl.workers.engine.torchtitan.TorchTitanEngineWithLMHead``

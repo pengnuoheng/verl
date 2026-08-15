@@ -35,7 +35,6 @@ __all__ = [
     "EngineConfig",
     "EngineRouterReplayConfig",
     "QATEngineConfig",
-    "MindSpeedEngineConfig",
 ]
 
 
@@ -177,6 +176,8 @@ class McoreEngineConfig(EngineConfig):
         use_mbridge (bool): Whether to use MBridge for communication.
         vanilla_mbridge (bool): Whether to use the deprecated legacy mbridge backend instead of Megatron-Bridge.
         use_megatron_fsdp (bool): Whether to use Megatron-FSDP (Zero-3 sharding).
+        pad_to_length (bool): Whether to round every packed micro-batch up to a bucket-aligned length.
+        pad_to_length_bucket (int): Padding granularity on the global packed sequence.
         dtype (str): Mixed precision training param dtype, default "bfloat16"
     """
 
@@ -196,6 +197,8 @@ class McoreEngineConfig(EngineConfig):
     sequence_parallel: bool = True
     use_distributed_optimizer: bool = True
     pad_bshd_to_minibatch_max: bool = True
+    pad_to_length: bool = False
+    pad_to_length_bucket: int = 512
     use_dist_checkpointing: bool = False
     dist_checkpointing_path: Optional[str] = None
     dist_checkpointing_prefix: str = ""
@@ -653,30 +656,6 @@ class AutomodelEngineConfig(EngineConfig):
             f"distributed_strategy {self.distributed_strategy} not supported"
         )
         assert self.pp_size == 1, "Pipeline parallelism (pp_size > 1) is not yet supported for automodel backend"
-
-
-@dataclass
-class MindSpeedEngineConfig(McoreEngineConfig):
-    """Configuration for mindspeed parallelism.
-
-    The inheritance from BaseConfig provides omegaconf.DictConfig-like interface for a dataclass config.
-
-    Args:
-        mcore_kwargs dict[str, Any]: mindspeed_megatron engine kwargs.
-        fsdp_kwargs dict[str, Any]: mindspeed_fsdp engine kwargs.
-    """
-
-    strategy: str = "mindspeed_megatron"
-    mcore_kwargs: dict[str, Any] = field(default_factory=dict)
-    fsdp_kwargs: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        """config validation logics go here"""
-        assert self.strategy in ["mindspeed_megatron", "mindspeed_fsdp"], f"strategy {self.strategy} not supported"
-        assert self.dtype in ["bfloat16", "float16"], f"dtype {self.dtype} not supported"
-        if self.tensor_model_parallel_size == 1:
-            warnings.warn("set sequence parallel to false as TP size is 1", stacklevel=2)
-            self.sequence_parallel = False
 
 
 @dataclass

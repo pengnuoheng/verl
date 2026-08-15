@@ -339,6 +339,7 @@ def preprocess_thd_engine(
     use_fp8_padding: bool = False,
     local_cp_size: int | None = None,
     min_local_rows: int | None = None,
+    pad_to_length_bucket: int | None = None,
     cp_layout: ContextParallelLayout = "zigzag",
 ) -> tuple[torch.Tensor, PackedSeqParams, torch.Tensor | None]:
     """Pack nested THD sequences and shard their rows across CP ranks.
@@ -398,6 +399,16 @@ def preprocess_thd_engine(
             pad_size_last = min_total_rows - cu_seqlens_padded[-1]
             cu_seqlens_padded[-1] += pad_size_last
             seqlens_in_batch_padded[-1] += pad_size_last
+
+    if pad_to_length_bucket is not None:
+        if pad_to_length_bucket <= 0:
+            raise ValueError("pad_to_length_bucket must be a positive integer")
+        total_alignment = math.lcm(pad_to_length_bucket, cp_size)
+        if use_fp8_padding:
+            total_alignment = math.lcm(total_alignment, total_align)
+        pad_size_last = (-cu_seqlens_padded[-1]) % total_alignment
+        cu_seqlens_padded[-1] += pad_size_last
+        seqlens_in_batch_padded[-1] += pad_size_last
 
     # ----------------------------------------------------------------------------
     # Move the index information needed in the subsequent loop to the CPU at once,
@@ -617,7 +628,7 @@ def postprocess_thd_engine(
         half_seqlen = s_len_padded_chunk // 2
         s_len = seq_lens_cpu[i]
         s_len_padded = s_len_padded_chunk * cp_size
-        tmp = torch.empty(s_len_padded, *output.shape[2:], device=output.device)
+        tmp = torch.empty(s_len_padded, *output.shape[2:], device=output.device, dtype=output.dtype)
         for j in range(cp_size):
             o = output_list[j][0]
             # split to 2 chunks
@@ -838,17 +849,13 @@ def postprocess_bshd_engine(
 
 
 def build_vlm_attn_mask_thd(input_ids: torch.Tensor, pad_token_id: int = None):
-    input_ids_rmpad = input_ids.to_padded_tensor(pad_token_id)
-
-    if is_npu_available:
-        return input_ids_rmpad, None
-
+    input_ids_with_pad = input_ids.to_padded_tensor(pad_token_id)
     seqlens_in_batch = input_ids.offsets().diff()
-    attention_mask = torch.zeros_like(input_ids_rmpad, dtype=torch.bool)
+    attention_mask = torch.zeros_like(input_ids_with_pad, dtype=torch.bool)
     for i, seqlen in enumerate(seqlens_in_batch):
         attention_mask[i, :seqlen] = True
 
-    return input_ids_rmpad, attention_mask
+    return input_ids_with_pad, attention_mask
 
 
 def build_vlm_attn_mask_bshd(
