@@ -1,7 +1,7 @@
 FSDP-Turbo backend
 ==================
 
-Last updated: 08/10/2026.
+Last updated: 08/15/2026.
 
 FSDP-Turbo (``fsdp_turbo``) is a high-performance FSDP training backend built
 on top of the `fsdp-turbo <https://gitcode.com/Ascend/FSDPTurbo.git>`_ library.
@@ -9,7 +9,7 @@ It extends verl's FSDP engine family (``fsdp``, ``fsdp2``) with native support
 for hybrid parallelism that combines fully-sharded data parallelism with expert
 parallelism (EP) and context parallelism (CP) on a single ``DeviceMesh``.
 
-The backend works on both Ascend NPU and NVIDIAGPUs. It is worth noting that
+The backend works on both Ascend NPU and NVIDIA GPUs. It is worth noting that
 the ``fsdp_turbo`` python path should be exported in related shell scripts,
 i.e., export PYTHONPATH=/your_path/FSDPTurbo:$PYTHONPATH
 
@@ -89,7 +89,7 @@ When ``recompute=True``, activation checkpointing is applied to every module
 listed in ``recompute_plan``.
 
 Module patches and CP function patches
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Some Hugging Face model implementations need targeted patches so that
 FSDP-Turbo's CP path can intercept attention and loss computation.  These
@@ -102,30 +102,32 @@ Three patch lists are involved (all under ``turbo_config``):
 .. code-block:: bash
 
    # cp_plan.ulysses_function_patches — attention / GDN forwards split by CP
-   +actor_rollout_ref.actor.fsdp_config.turbo_config.distributed.cp_plan.ulysses_function_patches="[{target_functions:['transformers.models.qwen3_5_moe.modeling_qwen3_5_moe.eager_attention_forward'],type:full_attention},{target_functions:['transformers.models.qwen3_5_moe.modeling_qwen3_5_moe.Qwen3_5MoeGatedDeltaNet.forward'],type:gdn}]"
+   +actor_rollout_ref.actor.fsdp_config.turbo_config.distributed.cp_plan.ulysses_function_patches="[{target_functions:['transformers.models.qwen3_5_moe.modeling_qwen3_5_moe.eager_attention_forward'],type:full_attention},{target_functions:['transformers.models.qwen3_5_moe.modeling_qwen3_5_moe.Qwen3_5MoeGatedDeltaNet.forward'],type:gated_delta_net}]"
 
    # cp_plan.loss_function_patches — loss recomputation across CP ranks
    +actor_rollout_ref.actor.fsdp_config.turbo_config.distributed.cp_plan.loss_function_patches="[{target_functions:['transformers.loss.loss_utils.ForCausalLMLoss'],type:causal_lm_loss}]"
 
    # module_patches — replace a HF forward with a Turbo-compatible one
-   +actor_rollout_ref.actor.fsdp_config.turbo_config.module_patches="[{target:transformers.models.qwen3_5_moe.modeling_qwen3_5_moe.Qwen3_5MoeModel.forward,replacement:fsdp_turbo.models.qwen3_5_moe.qwen3_5_moe_model_forward}]"
+   +actor_rollout_ref.actor.fsdp_config.turbo_config.module_patches="[{target:transformers.models.qwen3_5_moe.modeling_qwen3_5_moe.Qwen3_5MoeModel.forward,replacement:fsdp_turbo.models.qwen.qwen3_5_moe.qwen3_5_moe_model_forward}]"
 
 Patch entry fields:
 
 * ``ulysses_function_patches`` / ``loss_function_patches`` — each entry has a
   ``target_functions`` list (fully-qualified callables) and a ``type`` that
   tells Turbo which CP-aware implementation to substitute.  Attention patches
-  use ``full_attention``; gated-delta-net layers use ``gdn``; the causal-LM
+  use ``full_attention``; gated-delta-net layers use ``gated_delta_net``; the causal-LM
   loss uses ``causal_lm_loss``.
 * ``module_patches`` — each entry has ``target`` (the original function) and
   ``replacement`` (the Turbo replacement, shipped under the ``fsdp_turbo``
   package).  The replacement is applied at engine initialization time.
 
 The dense Qwen3.5 scripts point at ``transformers.models.qwen3_5.modeling_qwen3_5``
-instead of the ``qwen3_5_moe`` module, but the patch structure is identical.
+instead of the ``qwen3_5_moe`` module, and use
+``fsdp_turbo.models.qwen.qwen3_5.qwen3_5_model_forward`` as the replacement.
+The patch structure is otherwise identical.
 
 Offload policy
-~~~~~~~~~~~~~
+~~~~~~~~~~~~~~
 
 FSDP-Turbo reuses verl's existing offload flags:
 
@@ -200,22 +202,25 @@ For CI, two minimal smoke-test scripts are available:
 
 .. code-block:: bash
 
-   # GPU e2e smoke test for Qwen3.5-2B (dense)
+   # GPU e2e smoke test for Qwen3.5-0.8B (dense)
    bash tests/special_e2e/run_ppo_trainer_fsdp_turbo.sh
 
    # NPU nightly CI smoke test for Qwen3.5-2B (dense)
    bash tests/special_npu/nightly_ci_ascend/run_grpo_qwen3_5_2b_fsdp_turbo_npu.sh
 
-Both smoke tests target Qwen3.5-2B on a single node, run for a small number of
-training steps (1 on GPU, 5 on NPU), and hardcode the Turbo plan rather than
-auto-detecting the device.
+The GPU smoke test targets Qwen3.5-0.8B (``FSDP_SIZE=8``, ``SP_SIZE=1``) on a
+single 8-GPU node; the GPU CI workflow overrides ``TOTAL_TRAINING_STEPS=2``
+(script default 1).  The NPU smoke test targets Qwen3.5-2B (``FSDP_SIZE=4``,
+``SP_SIZE=2``) on a single 8-NPU node with context parallelism enabled by
+default, and runs for 5 training steps.  Both hardcode the Turbo plan rather
+than auto-detecting the device.
 
 Source of truth
 ---------------
 
 * ``verl/workers/config/engine.py``: ``FSDPEngineConfig`` with the
   ``turbo_config`` field and ``strategy`` validation.
-* ``verl/workers/engine/fsdp/transformer_impl.py``:
+* ``verl/workers/engine/fsdp/fsdp_turbo_impl.py``:
   ``FSDPTurboEngineWithLMHead`` — mesh initialization, module building, and
   CP validation.
 * ``verl/workers/engine/fsdp/utils.py``:
@@ -225,3 +230,7 @@ Source of truth
 * ``tests/special_e2e/run_ppo_trainer_fsdp_turbo.sh``: GPU e2e smoke test.
 * ``tests/special_npu/nightly_ci_ascend/run_grpo_qwen3_5_2b_fsdp_turbo_npu.sh``:
   NPU nightly CI smoke test.
+* ``.github/workflows/e2e_ppo_trainer_fsdp_turbo_vllm.yml``: GPU e2e CI workflow
+  (8x L20, clones FSDPTurbo to ``/FSDPTurbo`` and exports ``PYTHONPATH``).
+* ``.github/workflows/nightly_ascend.yml``: NPU nightly CI workflow (turbo job
+  ``nightlyCI_grpo_qwen3_5_2b_fsdp_turbo_vllm_ascend``, scheduled daily).

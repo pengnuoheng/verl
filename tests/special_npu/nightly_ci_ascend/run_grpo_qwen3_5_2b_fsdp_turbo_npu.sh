@@ -103,7 +103,6 @@ ACTOR=(
     actor_rollout_ref.actor.fsdp_config.entropy_checkpointing=True
     actor_rollout_ref.actor.entropy_from_logits_with_chunking=True
     actor_rollout_ref.actor.use_torch_compile=False
-    actor_rollout_ref.ref.fsdp_config.use_torch_compile=False
     actor_rollout_ref.actor.fsdp_config.offload_policy=True
     actor_rollout_ref.actor.fsdp_config.param_offload=True
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
@@ -121,7 +120,6 @@ REF=(
     actor_rollout_ref.ref.fsdp_config.reshard_after_forward=True
     actor_rollout_ref.ref.entropy_from_logits_with_chunking=True
     actor_rollout_ref.ref.use_torch_compile=False
-    actor_rollout_ref.ref.fsdp_config.use_torch_compile=False
     actor_rollout_ref.ref.fsdp_config.offload_policy=True
     actor_rollout_ref.ref.fsdp_config.param_offload=True
 )

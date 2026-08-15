@@ -29,7 +29,7 @@
 #     - new workflow yaml is added to `.github/workflows`
 #     - new tests are added to workflow mentioned in 2.
 
-name: e2e_ppo_trainer_fsdp_turbo
+name: e2e_ppo_trainer_fsdp_turbo_vllm
 
 on:
   # Trigger the workflow on push or pull request,
@@ -64,7 +64,7 @@ on:
       # Megatron
       - "!verl/workers/**/megatron_*.py"
       # Entrypoints
-      - ".github/workflows/e2e_ppo_trainer_fsdp_turbo.yml"
+      - ".github/workflows/e2e_ppo_trainer_fsdp_turbo_vllm.yml"
       - "examples/data_preprocess/geo3k.py"
       - "tests/special_e2e/run_ppo_trainer_fsdp_turbo.sh"
       - "verl/trainer/main_ppo.py"
@@ -103,7 +103,7 @@ jobs:
           faas-url: "${{ env.DYNAMIC_RUNNER_ENDPOINT }}"
           mlp-image: "${{ env.IMAGE }}"
 
-  e2e_ppo_trainer_fsdp_turbo:
+  e2e_ppo_trainer_fsdp_turbo_vllm:
     needs: setup
     runs-on: ["${{ needs.setup.outputs.runner-label || 'L20x8' }}"]
     timeout-minutes: 60 # Increase this timeout value as needed
@@ -121,10 +121,11 @@ jobs:
           pip3 install -r requirements-test.txt
           pip3 install -r requirements.txt
           pip3 install --no-deps -e .
-          pip3 install transformers==5.3.0
+          pip3 install transformers==5.5.3
       - name: Clone FSDPTurbo
         run: |
-          git clone https://gitcode.com/pengnuoheng/FSDPTurbo.git /FSDPTurbo
+          rm -rf /FSDPTurbo
+          git clone https://gitcode.com/Ascend/FSDPTurbo.git /FSDPTurbo
       - name: Check final pip list
         run: |
           pip3 list
@@ -135,15 +136,15 @@ jobs:
       - name: Running GEO3K E2E training tests on 8 L20 GPUs with fsdp_turbo engine (FSDP_SIZE=8, USP=1)
         run: |
           ray stop --force
-          export PYTHONPATH=/FSDPTurbo:$PYTHONPATH
-          TOTAL_TRAINING_STEPS=2 bash tests/special_e2e/run_ppo_trainer_fsdp_turbo.sh
+          export PYTHONPATH=/FSDPTurbo
+          bash tests/special_e2e/run_ppo_trainer_fsdp_turbo.sh
 
   cleanup:
     runs-on: ubuntu-latest
     needs:
       [
         setup,
-        e2e_ppo_trainer_fsdp_turbo,
+        e2e_ppo_trainer_fsdp_turbo_vllm,
       ]
     if: always()
     steps:

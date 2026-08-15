@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # dependency: GPU vllm==0.18.0, transformers@<cc7ab9be>, fsdp_turbo
-# FSDP-Turbo e2e smoke test for Qwen3.5-2B (dense) on GPU.
+# FSDP-Turbo e2e smoke test for Qwen3.5-0.8B (dense) on GPU.
 
 set -xeuo pipefail
 
 INFER_BACKEND=${INFER_BACKEND:-vllm}
-MODEL_ID=${MODEL_ID:-Qwen/Qwen3.5-2B}
+MODEL_ID=${MODEL_ID:-Qwen/Qwen3.5-0.8B}
 MODEL_PATH=${MODEL_PATH:-${HOME}/models/${MODEL_ID}}
 TRAIN_FILE=${TRAIN_FILE:-${HOME}/data/geo3k/train.parquet}
 TEST_FILE=${TEST_FILE:-${HOME}/data/geo3k/test.parquet}
@@ -16,8 +16,8 @@ FSDP_SIZE=${FSDP_SIZE:-8}
 ROLLOUT_GPU_MEM_UTIL=${ROLLOUT_GPU_MEM_UTIL:-0.4}
 ROLLOUT_N=${ROLLOUT_N:-2}
 
-TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-16}
-PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-16}
+TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-8}
+PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-8}
 MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-512}
 MAX_RESPONSE_LENGTH=${MAX_RESPONSE_LENGTH:-128}
 TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-1}
@@ -88,7 +88,6 @@ ACTOR=(
     actor_rollout_ref.actor.fsdp_config.entropy_checkpointing=True
     actor_rollout_ref.actor.entropy_from_logits_with_chunking=True
     actor_rollout_ref.actor.use_torch_compile=False
-    actor_rollout_ref.ref.fsdp_config.use_torch_compile=False
     actor_rollout_ref.actor.fsdp_config.offload_policy=True
     actor_rollout_ref.actor.fsdp_config.param_offload=True
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
@@ -106,7 +105,6 @@ REF=(
     actor_rollout_ref.ref.fsdp_config.reshard_after_forward=True
     actor_rollout_ref.ref.entropy_from_logits_with_chunking=True
     actor_rollout_ref.ref.use_torch_compile=False
-    actor_rollout_ref.ref.fsdp_config.use_torch_compile=False
     actor_rollout_ref.ref.fsdp_config.offload_policy=True
     actor_rollout_ref.ref.fsdp_config.param_offload=True
 )
