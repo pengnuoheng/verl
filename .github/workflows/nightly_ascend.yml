@@ -416,6 +416,7 @@ jobs:
         run: |
           ray stop --force
           export PYTHONPATH=/FSDPTurbo:$PYTHONPATH
+          pip install transformers==5.16.0
           bash tests/special_npu/nightly_ci_ascend/run_grpo_qwen3_5_2b_fsdp_turbo_npu.sh
 
 # Test quick start vllm fsdp2
